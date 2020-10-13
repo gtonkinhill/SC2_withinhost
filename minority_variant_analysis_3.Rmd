@@ -17,7 +17,7 @@ knitr::opts_chunk$set(fig.width=20, fig.height=12,
 options(stringsAsFactors = FALSE)
 ```
 
-```{r, warning=FALSE, message=FALSE, setup}
+```{r, message=FALSE, warning=FALSE}
 library(data.table)
 library(tidyverse)
 library(matrixStats)
@@ -204,41 +204,12 @@ meta_multi <- replicate_meta %>% filter(biosample_source_id!='None') %>%
 repeated_samples <- unlist(map(meta_multi$samples, ~ .x[-1]))
 ```
 
-Plot iSNV counts across the genome
-
-```{r}
-#load gene locations
-annotations <- as_tibble(genbankr::readGenBank("./data/MN908947.3.gbk")@genes)
-
-pos_maf_count <- temp %>% group_by(pos, mut) %>%
-  summarise(
-    maf_count = n(),
-    freq = n()/length(all_sample_names)
-  )
-
-ggplot(pos_maf_count, aes(x=pos, y=maf_count)) + 
-  geom_point(size=0.5) +
-  scale_y_sqrt() + 
-  geom_rect(data=annotations, inherit.aes=FALSE, aes(xmin=start, xmax=end, ymin=0,
-                ymax=700, fill=gene), alpha=0.3) +
-  geom_label_repel(data=annotations, inherit.aes=FALSE, aes(x=start+(end-start)/2, y=400, label=gene), direction = 'y', segment.alpha = 0, size=3) +
-  theme_bw(base_size = 16) +
-  xlab("position in Sars-Cov-2 genome") +
-  ylab("sample count") 
-
-ggsave(filename = "./Figures/maf_count_w_annotation.pdf", width = 12, height = 7)
-ggsave(filename = "./Figures/maf_count_w_annotation.png", width = 12, height = 7)
-```
-
 ##Distribution of shared iSNVs across consensus phylogeny
 
-we also exclude sites seen in more than 2.5% of samples
+We now plot the phylogeny built from the consensus assemblies of our samples. Links are drawn between the tips of this tree if the samples share an intrahost variant. To avoid this plot being dominated by the most highly variable sites we exclude sites seen in more than 2.5% of samples.
 
 ```{r}
 all_seqs <- ape::read.dna("./data/consensus/MA_elan.20200529.consensus.filt.fasta", format = "fasta")
-# dated_tree <- read.tree("./data/consensus/elan.20200529.consensus.filt.mask.dated_rtt.tree")
-# dated_tree <- drop.tip(dated_tree, dated_tree$tip.label[!dated_tree$tip.label %in% all_sample_names])
-
 full_tree <- read.tree("./data/consensus/elan.20200529.consensus.filt.mask.tree")
 full_tree <- root(full_tree, outgroup='MN908947.3', resolve.root=TRUE)
 full_tree <- drop.tip(full_tree, full_tree$tip.label[!full_tree$tip.label %in% all_sample_names])
@@ -250,7 +221,7 @@ consensus_cov <- map_dfr(unique(run_consensus_df$POS), function(i){
   return(bf)
 })
 
-#exclude positions seen in more than 2% of samples
+#exclude positions seen in more than 2.5% of samples
 common_sites <- run_consensus_df %>% group_by(POS) %>%
   summarise(count=n()) %>%
   filter(count>24)
@@ -338,9 +309,6 @@ plotdf$variable <- as.character(plotdf$variable)
 plotdf$variable[plotdf$variable=='IHV'] <- "within-host variants < 2% of samples"
 plotdf$variable[plotdf$variable=='IHV_all'] <- "all within-host variants"
 
-# plotdf$variable[plotdf$variable=='cons_count'] <- "found in COG-UK consensus genomes"
-# plotdf$variable[plotdf$variable=='non_cons_count'] <- "found only as a minor allele"
-
 plotdf <- plotdf %>%
   filter(sampleA %in% full_tree$tip.label) %>%
   filter(sampleB %in% full_tree$tip.label)
@@ -367,41 +335,9 @@ ggsave(filename = "Figures/phylogeny_with_maf_links2.png", width = 12, height = 
 
 ##Identifying possible mixed infections
 
-```{r}
-library(RColorBrewer)
+Potential mixed infections were identified using a linear model by testing whether the allele frequencies in a sample could be better explained by the inclusion of an additional consensus genome from the COG-UK dataset of the 29th May 2020. Additional samples mixtures were considered if the addition of a COG-UK consensus genome could explain at least 2 iSNVs and have at most 1 variant that was not found in the alleles of the sample. This identified 54 putative mixtures which were then screened manually to obtain 36 potentially mixed samples.
 
-shearwater_calls_no_rep <- shearwater_calls %>% filter(!sampleID %in% repeated_samples)
-shearwater_calls_no_rep$pos_change <- sprintf("%s%i%s", shearwater_calls_no_rep$ref, shearwater_calls_no_rep$pos, shearwater_calls_no_rep$mut)
-
-plot_mixed_vaf <- function(pos){
-  temp_samples <- unique(shearwater_calls_no_rep$sampleID[(shearwater_calls_no_rep$pos_change==pos) & (shearwater_calls_no_rep$vaf<0.95) & (shearwater_calls_no_rep$vaf>0.0)])
-  pdf <- shearwater_calls_no_rep %>% filter(sampleID %in% temp_samples)
-  pdf$pos_change <- factor(pdf$pos_change, levels=c(pos, unique(pdf$pos_change)[unique(pdf$pos_change)!=pos]))
-  gg <- ggplot(pdf, aes(x=pos_change, y=sampleID, fill=vaf)) + 
-    geom_tile() +
-    theme_bw(base_size = 14) +
-    theme(axis.text.x=element_blank(),
-        axis.ticks.x=element_blank()) +
-    ylab('sample') +
-    xlab('variant') +
-    # scale_fill_stepsn(colours = c('#ca0020','#f4a582','#f7f7f7','#92c5de','#0571b0'), breaks=c(0.25,0.5,0.75)) +
-    scale_fill_binned(type = 'viridis', breaks=c(0.25,0.5,0.75)) +
-    ggtitle(pos)
-  gg
-  return(gg)
-}
-
-plot_mixed_vaf("A13780T")
-ggsave('./Figures/heatmap_A13780T.png', height = 7, width = 10)
-
-plot_mixed_vaf("C683T")
-ggsave('./Figures/heatmap_C683T.png', height = 7, width = 10)
-
-plot_mixed_vaf("A1547T")
-ggsave('./Figures/heatmap_A1547T.png', height = 7, width = 10)
-```
-
-```{r}
+```{r, eval=FALSE}
 fwrite(run_consensus_df, "./Processed_data/run_consensus_mixture.csv", sep=',', quote = FALSE, row.names = FALSE)
 run_consensus_df <- fread("./Processed_data/run_consensus_mixture.csv", data.table = FALSE) %>% as_tibble()
 
@@ -497,18 +433,16 @@ mixture_tests <- furrr::future_map_dfr(all_samples, function(sA){
 write.csv(mixture_tests, "./Processed_data/mixture_tests_revised.csv", sep=',', quote=FALSE, row.names=FALSE)
 ```
 
+Load the preprocessed results from the code above.
+
 ```{r}
 mixture_tests <- fread("./Processed_data/mixture_tests_revised.csv", data.table = FALSE) %>% as_tibble()
-
 mixture_tests_mm <- mixture_tests %>% 
   filter(n_mismatch<2) %>%
   filter(n_extra_explained>1) %>%
   filter(estimate>0) %>%
   arrange(p.value)
-
 mixture_tests_mm <- mixture_tests_mm[!duplicated(mixture_tests_mm$sampleA),]
-
-# inigo_method <- c('CAMB-71F0D', 'CAMB-7217F', 'CAMB-72300', 'CAMB-7250A', 'CAMB-75974', 'CAMB-75A26', 'CAMB-75BE7', 'CAMB-75EEE', 'CAMB-76409', 'CAMB-76515', 'CAMB-766E5', 'CAMB-767C4', 'CAMB-768D0', 'CAMB-76AF8', 'CAMB-76B5F', 'CAMB-76F26', 'CAMB-7763F', 'CAMB-77893', 'CAMB-77CB5', 'CAMB-77E28', 'CAMB-77FBC', 'CAMB-78FD9', 'CAMB-79776', 'CAMB-79E71', 'CAMB-79FBA', 'CAMB-7A2FC', 'CAMB-7A57B', 'CAMB-7A599', 'CAMB-7A766')
 
 # remove those that on manual inspection don't appear to be convincingly mixtures
 mixture_tests_mm <- mixture_tests_mm[!mixture_tests_mm$sampleA %in% c('CAMB-7A326','CAMB-75E93', 'CAMB-71F76', 'CAMB-71D30',
@@ -622,39 +556,41 @@ ggsave(gg, filename = "Figures/potential_mixtures_selected_3.png", width = 12, h
 ggsave(gg, filename = "Figures/potential_mixtures_selected_3.pdf", width = 12, height = 7)
 ```
 
-We can also investigate lineage specific mutations as another check for multiple infections.
+##Consensus background of common intrahost variants
+
+To help ascertain whether common intrahost variants are the result of independent mutation events rather than transmission we generate heatmaps for a selection of variants which indicate the genomic background in which they occur. If these variants were the result of transmission we would expect to see the genetic background of fixed variants after aligning to the reference. That is, given an intrahost variant we would expect to see highly similar consensus sequences. The heatmaps below indicate that this is generally not the case and thus independent mutation events better explain many of the shared intrahost variants between samples.
 
 ```{r}
-meta <- fread("./data/consensus/20200529_trees/cog_global_2020-05-29_metadata.csv", data.table = FALSE) %>% as_tibble()
-meta$sampleID <- map_chr(str_split(meta$sequence_name, '/'), ~ .x[[2]])
-msa <- ape::read.dna("./data/consensus/20200529_trees/cog_2020-05-29_alignment.fasta", format = 'fasta')
+shearwater_calls_no_rep <- shearwater_calls %>% filter(!sampleID %in% repeated_samples)
+shearwater_calls_no_rep$pos_change <- sprintf("%s%i%s", shearwater_calls_no_rep$ref, shearwater_calls_no_rep$pos, shearwater_calls_no_rep$mut)
 
-stopifnot(all(rownames(msa) %in% meta$sequence_name))
+plot_mixed_vaf <- function(pos){
+  temp_samples <- unique(shearwater_calls_no_rep$sampleID[(shearwater_calls_no_rep$pos_change==pos) & (shearwater_calls_no_rep$vaf<0.95) & (shearwater_calls_no_rep$vaf>0.0)])
+  pdf <- shearwater_calls_no_rep %>% filter(sampleID %in% temp_samples)
+  pdf$pos_change <- factor(pdf$pos_change, levels=c(pos, unique(pdf$pos_change)[unique(pdf$pos_change)!=pos]))
+  gg <- ggplot(pdf, aes(x=pos_change, y=sampleID, fill=vaf)) + 
+    geom_tile() +
+    theme_bw(base_size = 14) +
+    theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) +
+    ylab('sample') +
+    xlab('variant') +
+    # scale_fill_stepsn(colours = c('#ca0020','#f4a582','#f7f7f7','#92c5de','#0571b0'), breaks=c(0.25,0.5,0.75)) +
+    scale_fill_binned(type = 'viridis', breaks=c(0.25,0.5,0.75)) +
+    ggtitle(pos)
+  gg
+  return(gg)
+}
 
-lineages <- meta$lineage[match(rownames(msa), meta$sequence_name)]
-lineage_count <- table(lineages)
+plot_mixed_vaf("A13780T")
+ggsave('./Figures/heatmap_A13780T.png', height = 7, width = 10)
 
-unique_muts <- map_dfr(1:ncol(msa), ~{
-  tibble(
-    lineage = lineages,
-    nt = as.character(msa[,.x])
-    ) %>% 
-    group_by(nt) %>%
-    summarise(
-      lineages=list(unique(lineage)),
-      count=length(unique(lineage)),
-      seq_count=n()
-    ) %>%
-    filter(count==1) %>%
-    filter(nt %in% c('a','c','g','t')) %>%
-    add_column(pos=.x, .before=1)
-})
+plot_mixed_vaf("C683T")
+ggsave('./Figures/heatmap_C683T.png', height = 7, width = 10)
 
-unique_muts$lineages <- map_chr(unique_muts$lineages, ~ unlist(.x))
-unique_muts_in_all <- unique_muts[unique_muts$seq_count==lineage_count[unique_muts$lineages],]
+plot_mixed_vaf("A1547T")
+ggsave('./Figures/heatmap_A1547T.png', height = 7, width = 10)
 ```
-
-Initially we check for variants at sites that are consistent within a lineage. As not all lineages have such a site this only captures a subset of the data.
 
 We call lineages using pangolin v1.1.14 and database date 2020-05-19.
 
@@ -663,23 +599,12 @@ lineage_calls <- fread("/Users/gt4/Documents/covid_deep/data/consensus/combined_
                        data.table = FALSE) %>% as_tibble()
 stopifnot(all(run_consensus_df$sample %in% lineage_calls$taxon))
 run_consensus_df$lineage <- lineage_calls$lineage[match(run_consensus_df$sample, lineage_calls$taxon)]
-
-possible_contams <- map_dfr(run_consensus_df$sample, ~{
-  temp <- run_consensus_df %>% filter(sample==.x)
-  conflict <- unique_muts_in_all %>% 
-    filter(lineages %in% temp$lineage) %>%
-    filter(pos %in% temp$POS) %>%
-    add_column(sample=.x, .before = 1)
-  })
-possible_contams[!duplicated(possible_contams$sample),]
 ```
-
-##Concordance with consensus phylogeny
 
 
 ###Pairwise transmission model
 
-We now run a simple pairwise transmission model on the 1014 consensus genomes with good replicates and dating information. This can then be compared with the minor variant analysis.
+To investigate transmission, samples were only considered if both replicates produced high quality consensus genomes. When multiple samples from the same host were available the earliest sample was used. Pairwise SNP distances were generated between the consensus genomes using pairsnp v0.2.0 (Tonkin-Hill 2018). The distribution of the underlying number of intermediate transmission events between each pair of samples was then inferred using an implementation of the transcluster algorithm (Stimson et al. 2019; Tonkin-Hill 2020). The serial interval and evolutionary rate were set to 5 days and 1e-3 substitutions/site/year (Fauver et al. 2020; Zhang et al. 2020). 
 
 ```{r}
 replicate_meta <- fread("./Processed_data/keep_replicates_meta.csv", data.table = FALSE, sep=",",fill=TRUE) %>% as_tibble()
@@ -692,19 +617,25 @@ ape::write.FASTA(consensus_seqs_w_dates, file = "./data/consensus/combined_conse
 fwrite(date_info, file = "./data/consensus/combined_consensus_replicates_filt_dates.csv", quote = FALSE, sep=",", col.names = TRUE)
 ```
 
+Create the necessary multiple sequence alignment.
+
 ```
 mafft --auto --thread -1 --keeplength --addfragments combined_consensus_replicates_filt_dates.fa nCoV-2019.reference.fasta > MA_combined_consensus_replicates_filt_dates.fa
 ```
 
-```{r}
+```{r, eval=FALSE}
 temp_msa <- ape::read.dna("./data/consensus/MA_combined_consensus_replicates_filt_dates.fa", format = 'fasta')
 temp_msa <- temp_msa[2:nrow(temp_msa),]
 ape::write.FASTA(temp_msa, file = "./data/consensus/MA_combined_consensus_replicates_filt_dates.fa")
 ```
 
+Run the pairsnp and transcluster algorithms. These packages are available at https://github.com/gtonkinhill/pairsnp-cpp and https://github.com/gtonkinhill/fasttranscluster respectively.
+
 ```
 python ~/fasttranscluster/fasttranscluster-runner.py --msa MA_combined_consensus_replicates_filt_dates.fa  --dates combined_consensus_replicates_filt_dates.csv --save_probs --snp_threshold 10 -K 20 -o ./
 ```
+
+Load results and filter out repeated samples from the same patient.
 
 ```{r}
 trans_probs <- fread("./data/consensus/transcluster_probabilities.csv", data.table = FALSE) %>% as_tibble() 
@@ -733,21 +664,6 @@ complex_calls <- split(temp, temp$sampleID)
 
 trans_vs_poly <- map_dfr(c(0.01,0.02, 0.05, 0.1), function(min_maf){
   trans_probs$shared_poly <- map_dbl(1:nrow(trans_probs), function(i){
-    # mafA <- samples_list[[trans_probs$sampleA[[i]]]]
-    # mafB <- samples_list[[trans_probs$sampleB[[i]]]]
-    # 
-    # inboth <- mafA$POS[mafA$POS %in% mafB$POS]
-    # 
-    # if (length(inboth)<1){
-    #   return(0)
-    # }
-    # mafA <-  mafA[match(inboth, mafA$POS),]
-    # mafB <-  mafB[match(inboth, mafB$POS),]
-    # 
-    # inA <- mafA[,c('A', 'C', 'G', 'T')]>=(min_maf*mafA$Good_depth)
-    # inB <- mafB[,c('A', 'C', 'G', 'T')]>=(min_maf*mafB$Good_depth)
-    # 
-    # return(sum(rowSums(inA & inB)>1))
     if (!trans_probs$sampleA[[i]] %in% names(complex_calls)) return(0)
     if (!trans_probs$sampleB[[i]] %in% names(complex_calls)) return(0)
     mafA <- complex_calls[[trans_probs$sampleA[[i]]]] %>% filter(maf>min_maf)
@@ -771,7 +687,6 @@ colnames(trans_vs_poly) <- c("MAF","probability direct transmission", "mean shar
 trans_vs_poly$MAF <- paste("minimum MAF:", trans_vs_poly$MAF)
 
 ggplot(trans_vs_poly, aes(x=`probability direct transmission`, y=`mean shared minor variants`)) + 
-  # geom_point(size=5) +
   geom_col() +
   facet_wrap(~MAF, ncol = 1) +
   theme_bw(base_size = 16) +
@@ -782,7 +697,7 @@ ggsave(filename = "./Figures/pairwise_transmission_prob_vs_multi_maf_w_mix.pdf",
 ggsave(filename = "./Figures/pairwise_transmission_prob_vs_multi_maf_w_mix.png", width = 9, height = 7)
 ```
 
-plot with possible mixture excluded
+plot with possible mixtures excluded
 
 ```{r}
 trans_probs <- fread("./data/consensus/transcluster_probabilities.csv", data.table = FALSE) %>% as_tibble() 
@@ -801,21 +716,6 @@ trans_probs <- trans_probs %>%
 
 trans_vs_poly <- map_dfr(c(0.01,0.02, 0.05, 0.1), function(min_maf){
   trans_probs$shared_poly <- map_dbl(1:nrow(trans_probs), function(i){
-    # mafA <- samples_list[[trans_probs$sampleA[[i]]]]
-    # mafB <- samples_list[[trans_probs$sampleB[[i]]]]
-    # 
-    # inboth <- mafA$POS[mafA$POS %in% mafB$POS]
-    # 
-    # if (length(inboth)<1){
-    #   return(0)
-    # }
-    # mafA <-  mafA[match(inboth, mafA$POS),]
-    # mafB <-  mafB[match(inboth, mafB$POS),]
-    # 
-    # inA <- mafA[,c('A', 'C', 'G', 'T')]>=(min_maf*mafA$Good_depth)
-    # inB <- mafB[,c('A', 'C', 'G', 'T')]>=(min_maf*mafB$Good_depth)
-    # 
-    # return(sum(rowSums(inA & inB)>1))
     if (!trans_probs$sampleA[[i]] %in% names(complex_calls)) return(0)
     if (!trans_probs$sampleB[[i]] %in% names(complex_calls)) return(0)
     mafA <- complex_calls[[trans_probs$sampleA[[i]]]] %>% filter(maf>min_maf)
@@ -850,72 +750,11 @@ ggsave(filename = "./Figures/pairwise_transmission_prob_vs_multi_maf.pdf", width
 ggsave(filename = "./Figures/pairwise_transmission_prob_vs_multi_maf.png", width = 9, height = 7)
 ```
 
-plot weighted by D-statistic
+##Position level statistics
 
-```{r}
-trans_probs <- fread("./data/consensus/transcluster_probabilities.csv", data.table = FALSE) %>% as_tibble() 
+To investigate the phylogentic signal present in the patterns of intra host varianst across the consensus phylogeny we generated binary presence/absence vectors to indicate which of the replicate pairs a minority variant occurred in. These were then used with the maximum likelihood phylogeny previously described to infer both the delta and D-statistic which indicates the concordance between the minority variant and the consensus phylogeny. The R package caper v0.2 was used to infer the D-statistic (Orme et al. 2013; Fritz and Purvis 2010). The delta statistic was calculated using the R code provided with the publication (Borges et al. 2019). 
 
-# remove repeated samples
-trans_probs <- trans_probs %>%
-  filter(!sampleA %in% repeated_samples) %>%
-  filter(!sampleB %in% repeated_samples)
-
-# remove samples that are potentially mixed
-mixed_samples <- mixture_tests_mm$sampleA
-
-trans_probs <- trans_probs %>%
-  filter(!sampleA %in% mixed_samples) %>%
-  filter(!sampleB %in% mixed_samples)
-
-mD <- max(Dstat_results$D_stat)
-
-weights <- 1/table(unlist(map(complex_calls, ~.x$mut_pos)))
-
-trans_vs_poly <- map_dfr(c(0.01,0.02, 0.05, 0.1), function(min_maf){
-  trans_probs$shared_poly <- map_dbl(1:nrow(trans_probs), function(i){
-    
-    if (!trans_probs$sampleA[[i]] %in% names(complex_calls)) return(0)
-    if (!trans_probs$sampleB[[i]] %in% names(complex_calls)) return(0)
-    mafA <- complex_calls[[trans_probs$sampleA[[i]]]] %>% filter(maf>min_maf)
-    mafB <- complex_calls[[trans_probs$sampleB[[i]]]] %>% filter(maf>min_maf)
-    
-    temp_pos <- mafA$mut_pos[mafA$mut_pos %in% mafB$mut_pos]
-    return(sum(weights[temp_pos]))
-    
-    # temp_pos <- mafA$pos[mafA$mut_pos %in% mafB$mut_pos]
-    # return(mD*length(temp_pos) - sum(Dstat_results$D_stat[Dstat_results$pos %in% temp_pos]))
-  })
-  trans_probs$min_maf <- min_maf
-  return(trans_probs)
-})
-
-trans_vs_poly$`probability direct transmission` <- cut(exp(trans_vs_poly$`0`), breaks=seq(0,0.4,0.01))
-
-temp <- trans_vs_poly %>% filter(min_maf==0.1) %>% filter(exp(`0`)>0.18) %>% filter(shared_poly>0)
-length(unique(c(temp$sampleA, temp$sampleB)))
-
-trans_vs_poly <- trans_vs_poly %>% group_by(min_maf, `probability direct transmission`) %>%
-  summarise(
-    mean_shared_poly=mean(shared_poly)
-  )
-colnames(trans_vs_poly) <- c("MAF","probability direct transmission", "mean shared minor variants")
-trans_vs_poly$MAF <- paste("minimum MAF:", trans_vs_poly$MAF)
-
-ggplot(trans_vs_poly, aes(x=`probability direct transmission`, y=`mean shared minor variants`)) + 
-  # geom_point(size=5) +
-  geom_col() +
-  facet_wrap(~MAF, ncol = 1) +
-  theme_bw(base_size = 16) +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-  ylab("mean pairwise shared variants")
-
-ggsave(filename = "./Figures/pairwise_transmission_prob_vs_multi_maf_weighted.pdf", width = 9, height = 7)
-ggsave(filename = "./Figures/pairwise_transmission_prob_vs_multi_maf_weighted.png", width = 9, height = 7)
-```
-
-###Position level statistics
-
-## Delta statistic
+#### Delta statistic
 
 ```{r}
 source("./delta_statistic.R")
@@ -969,7 +808,7 @@ ggsave(file="./Figures/delta_histogram.pdf", width = 9, height = 7)
 write.csv(delta_results, file="./Processed_data/delta_results.csv", quote = FALSE, row.names = FALSE)
 ```
 
-## D statistic
+#### D statistic
 
 ```{r}
 bindata <- map_dfc(names(tb)[tb>2], ~{
@@ -1098,35 +937,9 @@ write.csv(concordance_stats, file='Processed_data/concordance_statistics.csv', q
 knitr::kable(concordance_stats)
 ```
 
-##Investigate sites from Oxford paper
-
-Don't see the 4 most common in our data.
-
-```{r}
-ox_4_most_common <- c(24156, 22565, 23434, 26524)
-run_consensus_df %>% filter(POS %in% ox_4_most_common)
-```
-
-major UK lineages identified in the Oxford paper
-
-```{r}
-maj_lineage_sites <- c(241, 14408, 23403)
-
-temp <- run_consensus_df %>% 
-  filter(POS %in% maj_lineage_sites) %>% 
-  arrange(sample)
-as.data.frame(temp)
-
-sum(!temp$sample %in% mixture_tests_mm$sampleA)
-
-temp <- temp[!temp$sample %in% mixture_tests_mm$sampleA,]
-as.data.frame(temp)
-```
-
-
 ##Within host variation increases over time
 
-Correct repeated samples
+To investigate the possible accumulation of de novo mutations during the course of an infection, we studied 43 individuals for whom we had multiple samples collected at different timepoints. Initially, we collect the VAFs inferred using the shearwater algorithm. Unlike in much of the analysis above, we allow for more complex variants rather than just single nucleotude polymorphisms.
 
 ```{r}
 MINMAF <- 0.01
@@ -1201,7 +1014,7 @@ multi_run_calls_recovered <- multi_run_calls_recovered %>%
   filter(!paste(pos, mut, host) %in% all_consensus$combined)
 ```
 
-
+Generate time series plots of the inferred VAFs within each patient. Multiple samples on the same day are 'jittered' to enable the variation within a day to be observed.
 
 ```{r}
 all_meta <- fread("./data/majora.20200501.metadata.tsv") %>% as_tibble() %>%
@@ -1238,7 +1051,7 @@ ggsave(filename = "./Figures/vaf_by_repeated_sample.pdf", width = 15, height = 1
 ggsave(filename = "./Figures/vaf_by_repeated_sample.png", width = 15, height = 10)
 ```
 
-Look just at zero day pairs
+To focus on the variance within samples we plot the number of shared variants versus the total number of minority variants for each pairwise combination of samples taken from the same patient on the same day. We also plot the proportion of shared variants between each pairwise combination, split by the different sampling techniques used.
 
 ```{r}
 same_days <- table(paste(multi_run_calls_recovered$host, multi_run_calls_recovered$date)[!duplicated(multi_run_calls_recovered$sampleID)])
@@ -1290,6 +1103,8 @@ t.test(plotdf2$prop_shared[plotdf2$n_samples==2 & plotdf2$sample_type=='swab'],
 plotdf2$isswab <- plotdf2$sample_type=='swab'
 summary(glm(n_shared ~ isswab + n_samples + n_muts, data = plotdf2, family='poisson'))
 ```
+
+Finally, we plot the difference in the number of withinhost minority variants between each pairwise combination of samples where the x-axis indicates the number of days seperating those samples.
 
 ```{r}
 pairwise_within_host_maf_diff <- map_dfr(unique(multi_run_calls_recovered$host), ~ {
