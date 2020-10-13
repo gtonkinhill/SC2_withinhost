@@ -1,0 +1,377 @@
+---
+title: "Within-host diversity analyses in SARS-CoV-2"
+output: html_document
+---
+    
+##1. Mutational spectra and load
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.path='Figs/', dev=c('png','pdf'), warning=FALSE, message=FALSE)
+```
+
+####Input files
+
+```{r message=FALSE, warning=FALSE}
+setwd("/Users/im3/Desktop/COVID/Project_Heron/Analysis_shearwater_calls/")
+mutations_file = "shearwater_intermediate_intersect_muts_both_runs_annotated_median_values_deltaVAF0.05_merge.rds"
+metadata_file = "replicate_meta.tsv"
+mutations = readRDS(mutations_file)
+exclude_samples = c("CAMB-728D4","CAMB-79345")
+```
+
+Reformatting the mutation file and adding sequence context information. 
+
+```{r message=FALSE, warning=FALSE}
+mutations$chr = "MN908947.3"; mutations$sampleID = mutations$sample; mutations$vaf = mutations$both_vaf # Formatting
+mutations = mutations[,c("sampleID","chr","pos","ref","mut","r1_vaf","r2_vaf","r1_pval","r2_pval","vaf")] # Formatting
+meta = read.table(metadata_file, header = 1, sep = "\t", stringsAsFactors = F)
+genomefa = "nCoV-2019.reference.fasta"
+genome = toupper(seqinr::read.fasta(genomefa)[[1]])
+mutations$context = sapply(mutations$pos, function(x) paste(genome[(x-1):(x+1)],collapse="")) # Trinucleotide context
+```
+
+Removing double-counted events not properly removed by the code to merge calls from run 1 and 2.
+
+```{r message=FALSE, warning=FALSE}
+mutations = mutations[order(mutations$sampleID, mutations$pos, mutations$ref), ]
+mutations$end = mutations$pos + nchar(mutations$ref) - 1
+
+ind = which(mutations$end[1:(nrow(mutations)-1)] > mutations$pos[2:nrow(mutations)] & mutations$sampleID[1:(nrow(mutations)-1)] == mutations$sampleID[2:nrow(mutations)])
+rmpos = rep(0,nrow(mutations))
+for (j in ind) {
+    if ((mutations$mut[j]=="-" & mutations$mut[j+1]=="-") | (mutations$mut[j]=="INS" & mutations$mut[j+1]=="INS")) {
+        pos = j - (nchar(mutations$ref[j])<nchar(mutations$ref[j+1])) + 1 # If both are indels, we keep the longest
+    } else if (any(mutations$mut[j:(j+1)] %in% c("-","INS"))) {
+        pos = j + which(!(mutations$mut[j:(j+1)] %in% c("-","INS"))) - 1 # If only one is an indel, we keep the indel
+    } else {
+        pos = j - (nchar(mutations$ref[j])<nchar(mutations$ref[j+1])) + 1 # If neither are indels, we keep the longest
+    }
+    rmpos[pos] = 1
+}
+mutations = mutations[!rmpos, ]
+mutations = mutations[!(mutations$sampleID %in% exclude_samples), setdiff(colnames(mutations),"end")]
+write.table(mutations, file="Shearwater_calls_20200714.txt", col.names=T, row.names=F, sep="\t", quote=F)
+```
+
+Numbers of patients and mutations in the dataset.
+
+```{r message=FALSE, warning=FALSE}
+nts = c("A","C","G","T")
+# Numbers of mutations
+aux = mutations[mutations$vaf<0.95 & !(mutations$sampleID %in% exclude_samples), ]
+num_subs = sum(aux$ref %in% nts & aux$mut %in% nts)
+num_dels = sum(nchar(aux$ref)>nchar(aux$mut) | aux$mut=="-")
+num_inds = sum(nchar(aux$ref)<nchar(aux$mut))
+num_mnvs = sum(nchar(aux$ref)>1 & nchar(aux$mut)>1 & nchar(aux$ref)==nchar(aux$mut))
+# Numbers of patients
+samples = read.table("sample_list_1181.tsv", header=0, sep="\t", stringsAsFactors=F)[,1]
+m = meta[meta$sample_id %in% setdiff(samples,exclude_samples), ]
+m$biosample_sources[m$biosample_sources==""] = 1:sum(m$biosample_sources=="")
+f = table(m$biosample_sources)
+num_patients = length(f)
+# Mean, median and minimum VAFs
+mean(mutations$vaf[mutations$vaf<0.95])
+median(mutations$vaf[mutations$vaf<0.95])
+min(mutations$vaf)
+mean(mutations$vaf<0.05)
+```
+
+Functional annotation of the mutations (using dNdScv).
+
+```{r message=FALSE, warning=FALSE}
+library(dndscv)
+dndsout = dndscv(mutations[,1:5], refdb = "RefCDS_MN908947.3.peptides.rda", max_muts_per_gene_per_sample = Inf, max_coding_muts_per_sample = Inf)
+annot = dndsout$annotmuts[,c("gene","aachange","ntchange","codonsub","impact","pid")]
+annot$str = paste(dndsout$annotmuts$sampleID, dndsout$annotmuts$pos, dndsout$annotmuts$ref, dndsout$annotmuts$mut, sep="_")
+mutations$str = paste(mutations$sampleID, mutations$pos, mutations$ref, mutations$mut, sep="_")
+mutations = base::merge(mutations, annot, by="str", all.x=T)
+# Removing duplication of mutations due to annotation (introduced by dndscv)
+dup = names(which(table(mutations$str)>1))
+rmpos = rep(0,nrow(mutations))
+for (j in 1:length(dup)) {
+    rmpos[which(mutations$str==dup[j])[-1]] = 1
+}
+mutations = mutations[!rmpos, setdiff(colnames(mutations),"str")]
+write.table(mutations, file="Shearwater_calls_20200714_annot.txt", col.names=T, row.names=F, sep="\t", quote=F)
+```
+
+We then generate some basic summary plots of the frequency of mutations.
+
+```{r message=FALSE, warning=FALSE, fig_calls_description, fig.height = 3.5, fig.width = 4.5}
+major = mutations[which(mutations$vaf>=0.95),] # Referred to as major variants in the manuscript
+withinhost = mutations[which(mutations$vaf<0.95),] # Referred to as within-host variants in the manuscript
+
+#dev.new(width=9, height=7); par(mfrow=c(2,3))
+
+h = hist(mutations$vaf, 50, las=1, xlab="VAF", main="VAF histogram", border="grey30", col="grey50", ylab="Total mutation calls")
+
+plot(h$mids, h$counts, log="y", las=1, xlab="VAF", main="Log-lin VAF distribution", border="grey30", col="grey50")
+
+f = table(major$sampleID) # number of major variants per sample
+f = c(rep(0,1181-length(f)),f) # appending 0s for samples without withinhost variants
+hist(f, 50, las=1, xlab="Major variants per sample", main="Number of major variants/sample")
+abline(v=median(f), col="cadetblue")
+
+f = table(withinhost$sampleID) # number of within-host variants per sample
+f = f[setdiff(names(f),exclude_samples)]
+f = c(rep(0,1181-length(f)-length(exclude_samples)),f) # appending 0s for samples without within-host variants
+hist(f, 50, las=1, xlab="Within-host variants per sample", main="Number of within-host variants/sample")
+abline(v=median(f), col="cadetblue")
+
+msplitsc = split(withinhost, f=withinhost$sampleID)
+scburden_pervirion = c(rep(0,1181-length(msplitsc)), sapply(msplitsc, function(x) sum(x$vaf)))
+print(sprintf("Lower bound estimate of the withinhost burden per virion: mean=%0.2g, median=%0.2g",mean(scburden_pervirion),median(scburden_pervirion)))
+hist(scburden_pervirion, 50, las=1, xlab="Lower bound mean within-host variants per virion", main="Estimated rate per virion", border="grey30", col="grey50")
+
+ct = setNames(as.numeric(meta$diagnostic_ct_value), meta$sample_id)
+boxplot(f~pmin(30,pmax(15,ct[names(f)])), notch=T, las=2, main="Within-host variants vs viral load (Ct)", xlab="Diagnostic Ct", ylab="Number of within-host variants")
+
+#dev.copy(pdf, file="Shearwater_burden_plots.pdf", width=9, height=7, useDingbats=F); dev.off(); dev.off()
+```
+
+Shearwater calls are relatively conservative, excluding many recurrent mutations at low VAFs compared to LoFreq or a simple VAF cutoff. Comparison of the mutational spectra, however, suggest that Shearwater calls appear cleaner, with a mutational spectrum more similar to that of major variants. Despite the relatively conservative calls, the estimates above suggest that the mean within-host burden is around 0.72 mutations/virion (median 0.37). These are underestimates due to limited sensitivity to within-host variants <1% VAF. With a divergence rate ~1e-3 mutations/site/year, or 0.08 mutations/genome/day, these estimates could be consistent with the expected frequency of de novo mutations after 4-9 days of infection. Of course, some within-host variants could have arisen in a previous host and transmitted through a loose bottleneck. It also appears that the distribution of burden per virion is wide. This may be partially caused by the stochastic occurrence of mutations during the early exponential growth phases. It may also be partially explained by some of our patients having been sampled after a long infection in hospital.
+
+####Mutational spectra of within-host and major variants
+
+The mutational spectra reveals limited sequence context dependency and a dominance of C>T and G>T changes in the + strand, with strong strand asymmetries. The spectra could be consistent with damage or RNA-editing of cytosines and guanines, possibly including spontaneous cytosine deamination and guanine oxidation. The weakness of the sequence dependence, in stark contrast to known APOBEC-induced mutations in human DNA, might argue against enzymatic RNA-editing.
+
+Plotting the spectrum of unique major variants.
+
+```{r message=FALSE, warning=FALSE, results='hide'}
+source("plotspectra_96_192.R")
+
+trinfreq = table(sapply(2:(length(genome)-1), function(x) paste(toupper(genome[(x-1):(x+1)]),collapse=""))) # Genome trinucleotide frequency 
+trinucs = paste(rep(nts,each=16,times=1),rep(nts,each=4,times=4),rep(nts,each=1,times=16), sep="")
+trinfreq = trinfreq[trinucs]; trinfreq[is.na(trinfreq)] = 0; names(trinfreq) = trinucs
+#dev.new(width=9,height=4.5)
+m = unique(major[,c("chr","pos","ref","mut","context")])
+plotspectrum192(m, pdfname="major_spectrum.pdf", trinfreqs=trinfreq, plottype=1); dev.off(); dev.off()
+plotspectrum12(m, pdfname="major_spectrum12.pdf", trinfreqs=trinfreq, ymax=0.6); dev.off(); dev.off()
+plotspectrum192(m, pdfname="major_spectrum_unnormalised.pdf", trinfreqs=NULL, plottype=1); dev.off(); dev.off()
+
+m$sampleID = "sarscov2"; m = m[,c("sampleID","chr","pos","ref","mut")]
+dndsout_major = dndscv(m, refdb = "RefCDS_MN908947.3.peptides.rda", max_muts_per_gene_per_sample = Inf, max_coding_muts_per_sample = Inf, cv = NULL)
+```
+
+Plotting the spectrum of unique within-host variants.
+
+```{r message=FALSE, warning=FALSE, results='hide'}
+#dev.new(width=9,height=5)
+m = unique(withinhost[,c("chr","pos","ref","mut","context")])
+plotspectrum192(m, pdfname="withinhost_spectrum.pdf", trinfreqs=trinfreq, plottype=1); dev.off(); dev.off()
+plotspectrum12(m, pdfname="withinhost_spectrum12.pdf", trinfreqs=trinfreq, ymax=0.6); dev.off(); dev.off()
+plotspectrum192(m, pdfname="withinhost_spectrum_unnormalised.pdf", trinfreqs=NULL, plottype=1); dev.off(); dev.off()
+
+m$sampleID = "sarscov2"; m = m[,c("sampleID","chr","pos","ref","mut")]
+dndsout_withinhost1 = dndscv(m, refdb = "RefCDS_MN908947.3.peptides.rda", max_muts_per_gene_per_sample = Inf, max_coding_muts_per_sample = Inf, outp = 1)
+```
+
+Unlike major variants, which are shared across samples due to the phylogenetic relationship among samples, within-host variants shared across samples seem to be largely independently recurrent events. Counting each of them only once artificially flattens the normalised mutation spectrum. We can reduce this distortion by allowing sites to be mutated a maximum number of times (e.g. 5). This avoids a few highly recurrent sites from dominating the spectrum.
+
+```{r message=FALSE, warning=FALSE, results='hide'}
+maxtimes = 5
+withinhost$mutstr = paste(withinhost$pos, withinhost$ref, withinhost$mut, sep="_")
+subcspl = split(withinhost, f=withinhost$mutstr)
+for (j in 1:length(subcspl)) { subcspl[[j]] = subcspl[[j]][1:min(nrow(subcspl[[j]]),maxtimes),] }
+subcspl = do.call("rbind", subcspl)
+#dev.new(width=9,height=5)
+m = subcspl[,c("chr","pos","ref","mut","context")]
+plotspectrum192(m, pdfname="withinhost_spectrum_max5timespermutation.pdf", trinfreqs=trinfreq, plottype=1); dev.off(); dev.off()
+plotspectrum12(m, pdfname="withinhost_spectrum_max5timespermutation12.pdf", trinfreqs=trinfreq, ymax=0.6); dev.off(); dev.off()
+plotspectrum192(m, pdfname="withinhost_spectrum_max5timespermutation_unnormalised.pdf", trinfreqs=NULL, plottype=1); dev.off(); dev.off()
+
+m$sampleID = paste("sarscov2", 1:nrow(m), sep=":"); m = m[,c("sampleID","chr","pos","ref","mut")]
+dndsout_withinhost2 = dndscv(m, refdb = "RefCDS_MN908947.3.peptides.rda", max_muts_per_gene_per_sample = Inf, max_coding_muts_per_sample = Inf)
+```
+
+Rate ratio of the plus/minus strands for C>U vs G>U normalised by sequence composition, as shown in the main text.
+
+```{r}
+m = mutations[which(mutations$vaf<0.95),]
+f = table(paste(m$ref[m$ref %in% nts & m$mut %in% nts],m$mut[m$ref %in% nts & m$mut %in% nts],sep=">")); f = f/sum(f)
+print((f["C>T"]/table(genome)["C"]) / (f["G>A"]/table(genome)["G"]))
+print((f["G>T"]/table(genome)["G"]) / (f["C>A"]/table(genome)["C"]))
+```
+
+We can also investigate the spectrum of apparent hypermutable sites.
+
+```{r message=FALSE, warning=FALSE, results='hide', fig_spectrum_withinhost_recurrsites, fig.height = 5, fig.width = 9}
+mintimes = 5
+withinhost$mutfreq = table(withinhost$mutstr)[withinhost$mutstr]
+recurrsites = unique(withinhost[withinhost$mutfreq>=mintimes, c("pos","ref","mut","context")])
+#dev.new(width=9,height=5)
+plotspectrum192(recurrsites, pdfname="withinhost_spectrum_recurrsites.pdf", trinfreqs=trinfreq, plottype=1); dev.off(); dev.off()
+plotspectrum12(recurrsites, pdfname="withinhost_spectrum_recurrsites12.pdf", trinfreqs=trinfreq); dev.off(); dev.off()
+plotspectrum192(recurrsites, pdfname="withinhost_spectrum_recurrsites_unnormalised.pdf", trinfreqs=NULL, plottype=1); dev.off(); dev.off()
+
+m = recurrsites; m$chr = "MN908947.3"; m$sampleID = "sarscov2"; m = m[,c("sampleID","chr","pos","ref","mut")]
+dndsout_recurr = dndscv(m, refdb = "RefCDS_MN908947.3.peptides.rda", max_muts_per_gene_per_sample = Inf, max_coding_muts_per_sample = Inf)
+```
+
+This reveals a clear bias towards C>T and, particularly, for TCG>TTG (although the absolute number of recurrent TCG>TTG sites is small). We can look at the extended sequence context to try to gain further insights into these recurrent sites. The sequences below show a relative enrichment of T upstream of the mutant base.
+
+```{r message=FALSE, warning=FALSE, results='hide'}
+recurrsites$extctx = sapply(recurrsites$pos, function(x) paste(genome[(x-5):(x+5)],collapse="")) # Extended sequence context
+#cat(paste(recurrsites$extctx[recurrsites$ref=="C" & recurrsites$mut=="T"], collapse="\n"))
+```
+
+We can calculate separate dN/dS ratios for within-host variants at low and high VAFs. As expected, dN/dS ratios are lower the higher the minimum VAF cutoff.
+
+```{r message=FALSE, warning=FALSE}
+s = withinhost[withinhost$vaf>0.10,]
+maxtimes = 5
+subcspl = split(s, f=s$mutstr)
+for (j in 1:length(subcspl)) { subcspl[[j]] = subcspl[[j]][1:min(nrow(subcspl[[j]]),maxtimes),] }
+subcspl = do.call("rbind", subcspl)
+m = subcspl[,c("chr","pos","ref","mut","context")]
+m$sampleID = paste("sarscov2", 1:nrow(m), sep=":"); m = m[,c("sampleID","chr","pos","ref","mut")]
+dndsout_withinhost3 = dndscv(m, refdb = "RefCDS_MN908947.3.peptides.rda", max_muts_per_gene_per_sample = Inf, max_coding_muts_per_sample = Inf, outp = 1)
+```
+
+####dN/dS ratios for within-host and major variants
+
+```{r message=FALSE, warning=FALSE, fig_dnds_ratios, fig.height = 4.5, fig.width = 8}
+# Plot dN/dS ratios
+#dev.new(width=10,height=5); par(mfrow=c(1,2))
+
+d1 = dndsout_major$globaldnds[1:2,2:4]
+d2 = dndsout_withinhost3$globaldnds[1:2,2:4]
+d3 = dndsout_withinhost2$globaldnds[1:2,2:4]
+d4 = dndsout_recurr$globaldnds[1:2,2:4]
+h = barplot(cbind(d1[,1],d2[,1],d3[,1],d4[,1]), beside=T, ylim=c(0,1.4), col=c("cadetblue","grey50"), border=NA, las=1, ylab="dN/dS ratios", names=c("Major variants","Within-host >10%","Within-host all","Recurrent within-host"))
+segments(x0=h, y0=cbind(d1[,2],d2[,2],d3[,2],d4[,2]), y1=cbind(d1[,3],d2[,3],d3[,3],d4[,3]))
+legend(x=1, y=1.4, legend=c("Missense","Nonsense"), col=c("cadetblue","grey50"), pch=15, box.col="white")
+abline(h=1, col="black")
+
+withinhost$impbp = factor(withinhost$impact, levels = c("Synonymous","Missense","Nonsense"))
+boxplot(vaf ~ impbp, ylim=c(0,0.1), data = withinhost[withinhost$impact %in% c("Synonymous","Missense","Nonsense"), ], las=1, notch=T, col="grey90", ylab="VAF", xlab="Impact")
+withinhost$impbp = NULL
+pmis = wilcox.test(withinhost$vaf[withinhost$impact=="Synonymous"], withinhost$vaf[withinhost$impact=="Missense"])$p.value
+pnon = wilcox.test(withinhost$vaf[withinhost$impact=="Synonymous"], withinhost$vaf[withinhost$impact=="Nonsense"])$p.value
+text(x=c(1.5,2.5), y=0.08, labels=c(sprintf("P=%0.3g",pmis),sprintf("P=%0.3g",pnon)))
+
+#dev.copy(pdf, file="Shearwater_selection_plots_dNdS_vafs.pdf", width=10, height=5, useDingbats=F); dev.off(); dev.off()
+print(sprintf("P-values VAF of missense or nonsense mutations vs synonymous: pmis=%0.3g, pnon=%0.3g", pmis, pnon))
+```
+
+####Annotation of the support for the reference base
+
+```{r message=FALSE, warning=FALSE}
+# Loading the mutant calls
+counts1 = readRDS("run_1_coverage.rds")
+counts2 = readRDS("run_2_coverage.rds")
+countsall = counts1[,,1:6] + counts1[,,7:12] + counts2[,,1:6] + counts2[,,7:12]
+counts_samplids = read.table("sample_list_1181.tsv", header=0, sep="\t", stringsAsFactors=F)[,1]
+counts_nts = c("A","T","C","G","-","INS")
+ntids = setNames(1:6,counts_nts)
+mutations$ref1 = ntids[substr(mutations$ref,1,1)]
+mutations$vaf_ref = NA
+for (j in 1:nrow(mutations)) {
+    x = countsall[which(mutations$sampleID[j]==counts_samplids), mutations$pos[j], ]
+    mutations$vaf_ref[j] = x[mutations$ref1[j]] / sum(x)
+}
+mutations = mutations[, setdiff(colnames(mutations),"ref1")]
+write.table(mutations, file="Shearwater_calls_20200714_annot.txt", col.names=T, row.names=F, sep="\t", quote=F)
+```
+
+####Distribution of recurrent intrahost mutations
+
+We can first plot the position and frequency of recurrent intrahost variants across the viral genome, and then calculate the number of different genomic backgrounds (as defined by the set of major variants) in which they occur.
+
+```{r message=FALSE, warning=FALSE, fig_genomewide_distrib_recurrsites, fig.height = 3.5, fig.width = 6}
+withinhost$mutstr = paste(withinhost$pos)
+mintimes = 5
+numsamples = 1181-length(exclude_samples)
+withinhost$nsamples = table(withinhost$pos)[withinhost$mutstr]
+recurrsites = unique(withinhost[withinhost$mutfreq>=mintimes, c("pos","nsamples")])
+recurrsites = recurrsites[order(recurrsites$pos),]
+recurrsites$mutfreq = recurrsites$nsamples / numsamples * 100
+
+# Loading the genome annotation table
+reftable = read.table("Reftable_MN908947.3_peptide_resolution.txt", header=1, sep="\t", stringsAsFactors=F, quote = "\"", na.strings = "-", fill = TRUE)
+orf = sapply(strsplit(reftable$gene.name, split=":"), function(x) x[1])
+library(RColorBrewer)
+v = c(brewer.pal(8,"Set2"),brewer.pal(8,"Dark2"))
+colvec = setNames(v[1:length(unique(orf))], unique(orf))
+reftable$col = colvec[orf]
+reftable$height = rep(c(-1,0), length.out=nrow(reftable))
+    
+#dev.new(width=8, height=8); par(mfrow=c(3,1))
+
+# 1. Genome structure: ORFs and peptides
+plot(NA, xlim=c(1,length(genome)), ylim=c(-5,5), axes=F, xlab="", ylab="")
+for (j in 1:nrow(reftable)) {
+    rect(xleft=reftable$chr.coding.start[j], xright=reftable$chr.coding.end[j], ybottom=reftable$height[j], ytop=reftable$height[j]+1, border=NA, col=reftable$col[j])
+}
+
+# 2. Distribution of recurrent mutations per sample
+plot(NA, xlim=c(1,length(genome)), ylim=c(min(recurrsites$mutfreq),max(recurrsites$mutfreq)), log="y", las=1, xlab="Genome position", ylab="% samples")
+segments(x0=recurrsites$pos, y0=min(recurrsites$mutfreq/10), y1=recurrsites$mutfreq)
+
+# 3. Distribution of recurrent mutations per unique major genotype
+aux = split(major[major$vaf>=0.95,], f=major$sampleID[major$vaf>=0.95])
+major_bkgs = sapply(aux, function(x) paste(sort(paste(x$pos,x$ref,x$mut,sep=":")),collapse=","))
+withinhost$major_bkgs = major_bkgs[withinhost$sampleID]
+recurrsites$nbkgs = sapply(recurrsites$pos, function(x) length(unique(withinhost$major_bkgs[withinhost$pos==x])))
+recurrsites$nbkgs_freq = recurrsites$nbkgs / length(unique(major_bkgs)) * 100
+
+plot(NA, xlim=c(1,length(genome)), ylim=c(min(recurrsites$mutfreq),max(recurrsites$mutfreq)), log="y", las=1, xlab="Genome position", ylab="% of genomic backgrounds")
+segments(x0=recurrsites$pos, y0=min(recurrsites$nbkgs_freq), y1=recurrsites$nbkgs_freq)
+
+#dev.copy(pdf, file="Genomewide_distribution_recurrent_sites.pdf", width=8, height=8, useDingbats=F); dev.off(); dev.off()
+```
+
+####Dataset summary plot (Fig 1)
+
+We can randomly choose 100 samples to show the typical numbers of major and within-host variants per sample, and the VAFs of the mutations.
+
+```{r message=FALSE, warning=FALSE, fig_1ab, fig.height = 4.5, fig.width = 6}
+sub_types = c("A>C","A>G","A>T","C>A","C>G","C>T","Indels+MNVs")
+colvec = setNames(c("brown3","darkorange2","darkgreen","royalblue3","darkslategray3","darkorchid4","grey50"), sub_types)
+mt = c("A>C"=1, "T>G"=1, "A>G"=2, "T>C"=2, "A>T"=3, "T>A"=3, "C>A"=4, "G>T"=4, "C>G"=5, "G>C"=5, "C>T"=6, "G>A"=6)
+mutations$muts_type = as.numeric(mt[paste(mutations$ref, mutations$mut, sep=">")])
+mutations$muts_type[is.na(mutations$muts_type)] = 7
+mutations$muts_col = adjustcolor(colvec[mutations$muts_type], alpha.f=0.7)
+# Selecting 100 samples 
+n = 100 # Number of samples to represent
+set.seed(123)
+s = sample(setdiff(samples, exclude_samples), size=n, replace=F)
+m = split(mutations, f=mutations$sampleID)[s]
+m = m[order(sapply(m, function(x) sum(x$vaf<0.95)))] # Sorting by the number of within-host mutations
+
+#dev.new(width=8, height=7.5); par(mfrow=c(2,1))
+
+plot(x=1:n, y=sapply(m, function(x) sum(x$vaf<0.95)), xlab=sprintf("Samples (%0.0f randomly selected)",n), ylab="Mutation calls",
+     col=adjustcolor("cadetblue", alpha.f=0.8), pch=16, las=1, cex=0.7)
+points(x=1:n, y=sapply(m, function(x) sum(x$vaf>=0.95)), pch=16, cex=0.6, col=adjustcolor("black", alpha.f=0.8))
+legend(x=1, y=40, legend=c("Within-host (VAF<95%)","Major (VAF>=95%)"), pch=16, col=adjustcolor(c("cadetblue","black"), alpha.f=0.8), box.col="white")
+
+plot(x=1:n, y=rep(NA,n), ylim=c(0,100), xlab=sprintf("Samples (%0.0f randomly selected)",n), ylab="VAF", las=1)
+for (j in 1:length(m)) {
+    if (length(m[[j]]$vaf)>0) {
+        points(x=rep(j,nrow(m[[j]])), y=m[[j]]$vaf*100, col=m[[j]]$muts_col, cex=0.6, pch=16)
+    }
+}
+#dev.copy(pdf, file="fig_1ab.pdf", width=8, height=7.5, useDingbats=F); dev.off(); dev.off()
+```
+
+####Analysis of possible positively selected sites
+
+Spike protein D614G mutation.
+
+```{r}
+wilcox.test(withinhost$vaf[which(withinhost$aachange=="D614G" & withinhost$pos==23403)], withinhost$vaf[which(withinhost$aachange!="D614G" & withinhost$pos %in% recurrsites$pos)])
+median(withinhost$vaf[which(withinhost$aachange=="D614G" & withinhost$pos==23403)])
+median(withinhost$vaf[which(withinhost$aachange!="D614G" & withinhost$pos %in% recurrsites$pos)])
+```
+
+####Allele frequencies of individuals sampled multiple times
+
+We can also study the variation in allele frequencies between samples from different days from the same individual.
+
+```{r message=FALSE, warning=FALSE}
+metamult = meta[which(meta$biosample_sources!="" & meta$diagnostic_ct_value<24), ]
+metamult = metamult[order(metamult$collection_date), ]
+metamult = split(metamult, f=metamult$biosample_sources)
+metamult = metamult[sapply(metamult, nrow)>1]
+```

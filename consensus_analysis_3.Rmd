@@ -1,0 +1,242 @@
+---
+title: "Consensus Analysis"
+output:
+  html_document:
+    df_print: paged
+editor_options:
+  chunk_output_type: console
+---
+
+```{r, warning=FALSE, message=FALSE}
+library(lubridate)
+library(tidyverse)
+library(data.table)
+library(ape)
+library(ggtree)
+library(patchwork)
+```
+
+We first investigated the replicated consensus genomes.
+
+```
+mafft --auto --thread -1 --keeplength --addfragments combined_consensus_replicates.fa nCoV-2019.reference.fasta > MA_combined_consensus_replicates.fa
+```
+
+```{r}
+rep_msa <- ape::read.dna("./data/consensus/MA_combined_consensus_replicates.fa", format = "fasta", as.character = TRUE, as.matrix = TRUE)
+rep_msa <- toupper(rep_msa)
+
+#filter those with less than 29,000bp
+l <- map_int(1:nrow(rep_msa), ~ sum(rep_msa[.x,] %in% c("A","C","G","T","N")))
+n <- map_int(1:nrow(rep_msa), ~ sum(rep_msa[.x,]=="N"))
+rep_msa <- rep_msa[(l>29000) & (n/l < 0.05),]
+rep_msa <- rep_msa[rownames(rep_msa)!="MN908947.3",]
+
+samples <- gsub("_run.*", "", rownames(rep_msa))
+pairs <- map(unique(samples), ~ rep_msa[.x==samples,,drop=FALSE])
+names(pairs) <- unique(samples)
+
+#Filter to those that produce decent assemblies in both replicates.
+pairs <- pairs[map_dbl(pairs, nrow)>1]
+
+diffs <- map(pairs, ~{
+  which((.x[1,]!=.x[2,]) & (.x[1,] %in% c("A","C","G","T"))  & (.x[2,] %in% c("A","C","G","T")))
+})
+
+```
+
+We can now look at which sites are discordant between replicates at the consensus level. Interesingly site 10,239 appears 18 times. After looking at the corresponding bam files it appears that this is caused by a number of very deeply sequenced samples (>100,000x) which the assembly pipeline struggles with. The majority of reads in these cases matches the MN908947.3 reference, however the very high depth of sequencing leads to the errors. This issue with the assembly pipeline has since been corrected in the ARTIC assembly pipeline.
+
+```{r}
+knitr::kable(table(unlist(diffs)))
+```
+
+We next convert discordant bases to N's to deliver a single consensus per replicate pair for comparison with the broader COG-UK database.
+
+```{r}
+consensus_seqs <- as.DNAbin(map(pairs, ~ {
+  new <- .x[1,]
+  new[new!=.x[2,]] <- 'N'
+  new <- new[new!='-']
+  return(new)
+}))
+ape::write.FASTA(consensus_seqs, file = "./data/consensus/combined_consensus_replicates_filt.fa")
+```
+
+We restrict our analsis to those samples that can be easily mapped back to the metadata table. In addition we filter consensus genomes to ensure that they are at least 29,000bp in length and have no more than 5% ambigous sites. Sequences with duplicated sequence names were also removed.
+
+```{r}
+meta_data <- fread("./data/consensus/majora.20200529.metadata.tsv", data.table = FALSE) %>% as_tibble()
+replicate_meta_data <- fread("./data/replicate_meta.tsv", data.table = FALSE) %>% as_tibble()
+all_seqs <- ape::read.dna("./data/consensus/elan.20200529.consensus.fasta", format = "fasta")
+
+seq_names <- names(all_seqs)
+seq_names <- map_chr(str_split(seq_names, '/'), ~{
+  .x <- .x[[3]]
+  if (grepl('\\|',.x)){
+    str_split(.x, '\\|')[[1]][[2]]
+  } else {
+    .x
+  }
+} )
+
+sum(seq_names %in% meta_data$central_sample_id)
+names(all_seqs) <- seq_names
+all_seqs <- all_seqs[names(all_seqs) %in% meta_data$central_sample_id]
+
+all_seqs <- all_seqs[map_int(all_seqs, length)>29000]
+all_seqs <- all_seqs[map_dbl(1:length(all_seqs), ~ base.freq(all_seqs[.x], all = TRUE)['n'])<0.05]
+all_seqs <- all_seqs[!duplicated(names(all_seqs))]
+
+all_seqs <- all_seqs[!names(all_seqs) %in% names(consensus_seqs)]
+all_seqs <- c(consensus_seqs, all_seqs)
+
+ape::write.FASTA(all_seqs, "./data/consensus/elan.20200529.consensus.filt.fasta")
+```
+
+align to reference using MAFFTv7.464 
+
+```
+mafft --auto --thread -1 --keeplength --addfragments elan.20200529.consensus.filt.fasta nCoV-2019.reference.fasta > MA_elan.20200529.consensus.filt.fasta
+```
+
+we next masked sites that have been [suggested](http://virological.org/t/issues-with-sars-cov-2-sequencing-data/473/10) to cause issues with building accurate phylogenies.
+
+```
+bedtools maskfasta -fi MA_elan.20200529.consensus.filt.fasta -bed problematic_sites_sarsCov2_20200531.vcf -fo MA_elan.20200529.consensus.filt.mask.fasta
+```
+
+Generate a phylogeny using Fasttree. This has been [shown](https://github.com/roblanf/sarscov2phylo/blob/master/tree_estimation.md) to be a good compromise between accuracy and speed and should be sufficient for our purposes. We annotate the phylogeny to highlight the location of our samples on within the larger tree and illustrate the region each sample originated from.
+
+```
+FastTreeMP -nosupport -nt MA_elan.20200529.consensus.filt.mask.fasta > elan.20200529.consensus.filt.mask.tree
+```
+
+```{r}
+full_tree <- read.tree("./data/consensus/elan.20200529.consensus.filt.mask.tree")
+dates <- meta_data$collection_date[match(full_tree$tip.label, meta_data$central_sample_id)]
+names(dates) <- full_tree$tip.label
+dates['MN908947.3'] <- '2019-12-26'
+
+# drop tips we dont have dates for. This includes 3 samples for which we have replicates.
+full_tree <- drop.tip(full_tree, names(dates)[is.na(dates)])
+full_tree <- drop.tip(full_tree, names(dates)[dates=='None'])
+full_tree <- root(full_tree, outgroup='MN908947.3', resolve.root=TRUE)
+dates <- dates[!is.na(dates)]
+dates <- dates[dates!='None']
+n <- names(dates)
+dates <- lubridate::decimal_date(lubridate::as_date(dates))
+names(dates) <- n
+
+# dated_tree <- treedater::dater(full_tree, dates, 29903, 0.9e-3)
+# dated_tree <- ape::rtt(multi2di(full_tree), dates, objective='rms')  
+# write.tree(dated_tree, file="./data/consensus/elan.20200529.consensus.filt.mask.dated_rtt.tree")
+dated_tree <- full_tree #read.tree("./data/consensus/elan.20200529.consensus.filt.mask.dated_rtt.tree")
+
+sub_tree <-  drop.tip(dated_tree, dated_tree$tip.label[!dated_tree$tip.label %in% samples])
+
+sub_anno <- tibble(
+  seq=dated_tree$tip.label,
+  replicated=dated_tree$tip.label %in% samples
+)
+
+gg <- ggtree(dated_tree)
+gg1 <- gg %<+% sub_anno +
+  geom_tippoint(aes(colour=replicated), size=1) +
+  scale_color_manual(values = c(NA,'red')) +
+  theme(legend.position = "none")
+
+
+loc_anno <- replicate_meta_data %>% filter(sample_id %in% samples)
+loc_anno$adm2[loc_anno$adm2=='Unknown'] <- 'OTHER'
+loc_anno$adm2[loc_anno$adm2=='GREATER_LONDON'] <- 'LONDON'
+loc_anno$adm2[loc_anno$adm2==""] <- "OTHER"
+loc_anno <- tibble(
+  id=loc_anno$sample_id,
+  location=loc_anno$adm2,
+  location2=as.numeric(factor(loc_anno$adm2))
+)
+f2 <- facet_plot(ggtree(sub_tree), panel = "Location", 
+                 data = loc_anno, geom = geom_tile, aes(x = location2, fill=location))+
+  scale_fill_manual(values = c('#a6cee3','#1f78b4','#b2df8a','#33a02c','#fb9a99','#e31a1c',
+                                '#fdbf6f','#ff7f00','#cab2d6','#6a3d9a','#bababa','#b15928')) +
+  theme(plot.title = element_text(size = 12, face = "bold"),
+    legend.title=element_text(size=16), 
+    legend.text=element_text(size=9))
+
+gg1 + f2 + patchwork::plot_layout(nrow = 1)
+ggsave(filename = "./Figures/consensus_phylogeny.pdf", width = 12, height = 7)
+ggsave(filename = "./Figures/consensus_phylogeny.png", width = 12, height = 7)
+```
+
+##Sample Summary Table
+
+Generate supplementary table 1 which summarises the sample level information.
+
+```{r, echo=FALSE}
+meta_data <- fread("./data/consensus/majora.20200529.metadata.tsv", data.table = FALSE) %>% as_tibble()
+replicate_meta_data <- fread("./data/consensus/prev/replicate_meta.tsv", data.table = FALSE) %>% as_tibble()
+rep_msa <- ape::read.dna("./data/consensus/MA_combined_consensus_replicates.fa", format = "fasta")
+samples <- unique(gsub("_run.*", "", rownames(rep_msa)))
+samples <- samples[2:length(samples)]
+lineage_classifications <- fread("./data/consensus/cog_2020-05-08_metadata.csv", data.table = FALSE) %>% as_tibble()
+
+keep_replicates <- meta_data %>% 
+  filter(central_sample_id %in% names(pairs)) %>%
+  filter(!is.na(collection_date))
+fwrite(keep_replicates, file = "./Processed_data/keep_replicates_meta.csv", quote = FALSE, row.names = FALSE)
+
+replicate_meta_data <- replicate_meta_data[replicate_meta_data$sample_id %in% samples,]
+lineage_classifications$split_name <- str_split(lineage_classifications$sequence_name, "/|\\|")
+lineage_classifications <- lineage_classifications[map_lgl(lineage_classifications$split_name, ~ any(.x %in%samples)),]
+index <- map_int(lineage_classifications$split_name, ~ which(replicate_meta_data$sample_id %in% .x))
+
+replicate_meta_data$lineage <- NA
+replicate_meta_data$lineage[index] <- lineage_classifications$lineage
+replicate_meta_data$lineage_support <- NA
+replicate_meta_data$lineage_support[index] <- lineage_classifications$lineage_support
+
+replicate_meta_data$source_sex <- meta_data$source_sex[match(replicate_meta_data$sample_id, meta_data$central_sample_id)]
+replicate_meta_data$source_age <- meta_data$source_age[match(replicate_meta_data$sample_id, meta_data$central_sample_id)]
+
+replicate_meta_data$adm2[replicate_meta_data$adm2==""] <- 'Unknown'
+replicate_meta_data$adm2[replicate_meta_data$adm2=="None"] <- 'Unknown'
+replicate_meta_data$lineage[replicate_meta_data$lineage==""] <- "Unassigned"
+replicate_meta_data$lineage[is.na(replicate_meta_data$lineage)] <- "Unassigned"
+replicate_meta_data$source_age[replicate_meta_data$source_age=='None'] <- NA
+replicate_meta_data$collection_date <- as_date(replicate_meta_data$collection_date)
+
+temp1 <- replicate_meta_data %>% group_by(adm2) %>%
+  summarise(
+    `male/female/unknown`=sprintf("%d/%d/%d", sum(source_sex %in% c('M')), sum(source_sex %in% c('F')), sum(!source_sex %in% c('M','F')))
+  )
+
+temp2 <- replicate_meta_data %>% group_by(adm2) %>%
+  summarise(
+    `age range`=sprintf("%s-%s", min(source_age,na.rm = TRUE), max(source_age,na.rm = TRUE))
+  )
+
+tb <- merge(temp1, temp2, by.x='adm2', by.y='adm2')
+
+temp2 <- replicate_meta_data %>% group_by(adm2) %>%
+  summarise(
+    `collection date`=sprintf("(%s, %s)", min(collection_date,na.rm = TRUE), max(collection_date,na.rm = TRUE))
+  )
+
+tb <- merge(tb, temp2, by.x='adm2', by.y='adm2')
+
+temp2 <- replicate_meta_data %>% 
+  group_by(adm2, lineage) %>%
+  summarise(
+    count=n()
+  ) %>%
+  dcast(adm2~lineage)
+temp2[is.na(temp2)] <- 0
+
+tb <- merge(tb, temp2, by.x='adm2', by.y='adm2')
+
+df <- as_tibble(t(tb)[2:ncol(tb),]) %>% 
+  add_column(colnames(tb)[2:ncol(tb)], .before=1)
+colnames(df) <- c('', tb$adm2)
+knitr::kable(df)
+```
