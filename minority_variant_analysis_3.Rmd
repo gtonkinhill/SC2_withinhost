@@ -563,33 +563,90 @@ To help ascertain whether common intrahost variants are the result of independen
 ```{r}
 shearwater_calls_no_rep <- shearwater_calls %>% filter(!sampleID %in% repeated_samples)
 shearwater_calls_no_rep$pos_change <- sprintf("%s%i%s", shearwater_calls_no_rep$ref, shearwater_calls_no_rep$pos, shearwater_calls_no_rep$mut)
+ct_meta <- fread("data/replicate_meta_with_ct.tsv") %>% as_tibble()
 
 plot_mixed_vaf <- function(pos){
   temp_samples <- unique(shearwater_calls_no_rep$sampleID[(shearwater_calls_no_rep$pos_change==pos) & (shearwater_calls_no_rep$vaf<0.95) & (shearwater_calls_no_rep$vaf>0.0)])
+  temp_samples <- temp_samples[temp_samples %in% ct_meta$sample_id[ct_meta$diagnostic_ct_value<24]]
+  temp_samples <- sample(temp_samples, min(10, length(temp_samples)))
   pdf <- shearwater_calls_no_rep %>% filter(sampleID %in% temp_samples)
   pdf$pos_change <- factor(pdf$pos_change, levels=c(pos, unique(pdf$pos_change)[unique(pdf$pos_change)!=pos]))
-  gg <- ggplot(pdf, aes(x=pos_change, y=sampleID, fill=vaf)) + 
+  gg <- ggplot(pdf, aes(y=pos_change, x=sampleID, fill=vaf)) + 
     geom_tile() +
     theme_bw(base_size = 14) +
-    theme(axis.text.x=element_blank(),
-        axis.ticks.x=element_blank()) +
-    ylab('sample') +
-    xlab('variant') +
-    # scale_fill_stepsn(colours = c('#ca0020','#f4a582','#f7f7f7','#92c5de','#0571b0'), breaks=c(0.25,0.5,0.75)) +
-    scale_fill_binned(type = 'viridis', breaks=c(0.25,0.5,0.75)) +
+    theme(axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+    xlab('sample') +
+    ylab('variant') +
+    scale_fill_stepsn(colours = c('#ca0020','#f4a582','#f7f7f7','#92c5de', '#4393c3', '#2166ac','#252525'), breaks=c(0.25,0.5,0.75,0.95)) +
+    # scale_fill_binned(type = 'viridis', breaks=c(0.25,0.5,0.75)) +
     ggtitle(pos)
   gg
   return(gg)
 }
 
-plot_mixed_vaf("A13780T")
+gg1 <- plot_mixed_vaf("A13780T")
+gg1
 ggsave('./Figures/heatmap_A13780T.png', height = 7, width = 10)
 
-plot_mixed_vaf("C683T")
+gg2 <- plot_mixed_vaf("C683T")
+gg2
 ggsave('./Figures/heatmap_C683T.png', height = 7, width = 10)
 
-plot_mixed_vaf("A1547T")
+gg3 <- plot_mixed_vaf("A1547T")
+gg3
 ggsave('./Figures/heatmap_A1547T.png', height = 7, width = 10)
+
+set.seed(12345)
+focus <- c("A13780T", "C635T", "C21575T")
+pdf_all <- map_dfr(focus, function(pos){
+  temp_samples <- unique(shearwater_calls_no_rep$sampleID[(shearwater_calls_no_rep$pos_change==pos) & (shearwater_calls_no_rep$vaf<0.95) & (shearwater_calls_no_rep$vaf>0.0)])
+  temp_samples <- temp_samples[temp_samples %in% ct_meta$sample_id[ct_meta$diagnostic_ct_value<24]]
+  temp_samples <- sample(temp_samples, min(10, length(temp_samples)))
+  pdf <- shearwater_calls_no_rep %>% filter(sampleID %in% temp_samples)
+  pdf$pos <- pos
+  return(pdf)
+})
+
+pdf_all$order_x <- paste(pdf_all$sampleID, pdf_all$pos)
+pdf_all$order_x <- factor(pdf_all$order_x, 
+                          levels = unlist(map(focus, ~{
+  tempdf <- pdf_all %>% filter(pos==.x)
+  d <- matrix(0, nrow=length(unique(tempdf$sampleID)),
+              ncol = length(unique(tempdf$pos_change)),
+              dimnames = list(unique(tempdf$sampleID),
+                              unique(tempdf$pos_change)))
+  d[as.matrix(tempdf[,c('sampleID','pos_change')])] <- tempdf$vaf
+  d <- dist(d)
+  h <- hclust(d)
+  return(paste(unique(tempdf$sampleID)[h$order], .x))
+})))
+
+
+pdf_all$pos_change[pdf_all$pos_change %in% focus] <- paste(pdf_all$pos_change[pdf_all$pos_change %in% focus],
+                                                           pdf_all$pos[pdf_all$pos_change %in% focus])
+
+pdf_all$pos_change <- factor(pdf_all$pos_change, levels=c(paste(focus, focus), 
+                                                          unique(pdf_all$pos_change)[!unique(pdf_all$pos_change
+                                                                                             ) %in% paste(focus, focus)]))
+xticklabs <- function(x){gsub(' .*$', '', x)}
+
+ggplot(pdf_all, aes(y=pos_change, x=order_x, fill=vaf)) + 
+  geom_tile() +
+  theme_bw(base_size = 14) +
+  facet_wrap(~pos, nrow = 1, scales = "free") +
+  scale_x_discrete(labels=xticklabs) +
+  theme(axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  xlab('sample') +
+  ylab('variant') +
+  scale_fill_stepsn(colours = c('#ca0020','#f4a582','#f7f7f7','#92c5de', 
+                                '#4393c3', '#2166ac','#252525'), breaks=c(0.25,0.5,0.75,0.95))
+
+ggsave('./Figures/heatmap_selected_3.png', height = 7, width = 15)
+ggsave('./Figures/heatmap_selected_3.pdf', height = 7, width = 15)
 ```
 
 We call lineages using pangolin v1.1.14 and database date 2020-05-19.
@@ -1049,6 +1106,22 @@ ggplot(plotdf, aes(x=date_adj, y=vaf, col=mut_pos)) +
 
 ggsave(filename = "./Figures/vaf_by_repeated_sample.pdf", width = 15, height = 10)
 ggsave(filename = "./Figures/vaf_by_repeated_sample.png", width = 15, height = 10)
+
+
+focus <- c('CAMS001538', 'CAMS001741', 'CAMS002128')
+ggplot(plotdf %>% filter(host %in% focus), aes(x=date_adj, y=vaf, col=mut_pos)) + 
+  geom_line(alpha=0.5) +
+  geom_point(alpha=0.5) +
+  facet_wrap(~host, scales = "free_x", nrow = 1) +
+  scale_color_discrete(guide=FALSE) +
+  scale_x_continuous(breaks = 0:9) +
+  # scale_y_sqrt() +
+  theme_bw(base_size = 16) +
+  xlab('days from first sample') +
+  ylab('VAF')
+
+ggsave(filename = "./Figures/selected3_vaf_by_repeated_sample.pdf", width = 12, height = 5)
+ggsave(filename = "./Figures/selected3_vaf_by_repeated_sample.png", width = 12, height = 5)
 ```
 
 To focus on the variance within samples we plot the number of shared variants versus the total number of minority variants for each pairwise combination of samples taken from the same patient on the same day. We also plot the proportion of shared variants between each pairwise combination, split by the different sampling techniques used.
@@ -1137,7 +1210,7 @@ pairwise_within_host_maf_diff <- map_dfr(unique(multi_run_calls_recovered$host),
 gg3 <- ggplot(pairwise_within_host_maf_diff, aes(x=date_diff, y=mean_maf_diff, group=date_diff)) +
   geom_boxplot(outlier.colour = NA) +
   geom_jitter(height = 0, width = 0.2) +
-  theme_bw(base_size = 14) +
+  theme_bw(base_size = 16) +
   scale_x_continuous(breaks=0:9) +
   xlab("time difference between samples (days)") +
   ylab("difference in number of minor alleles")
@@ -1150,6 +1223,6 @@ model_data$adj_date <- as.numeric(model_data$date  - min_date[model_data$host])
 
 summary(glmer(maf_count ~  adj_date + sample_type_collected + (1|host), family = "poisson", data = model_data))
 
-ggsave(filename = "./Figures/repeated_samples_maf_count_vs_date.pdf", width = 9, height = 7)
-ggsave(filename = "./Figures/repeated_samples_maf_count_vs_date.png", width = 9, height = 7)
+ggsave(filename = "./Figures/repeated_samples_maf_count_vs_date.pdf", width = 12, height = 5)
+ggsave(filename = "./Figures/repeated_samples_maf_count_vs_date.png", width = 12, height = 5)
 ```
