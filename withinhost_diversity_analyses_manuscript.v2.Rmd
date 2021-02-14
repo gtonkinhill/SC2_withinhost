@@ -12,7 +12,6 @@ knitr::opts_chunk$set(fig.path='Figs/', dev=c('png','pdf'), warning=FALSE, messa
 ####Input files
 
 ```{r message=FALSE, warning=FALSE}
-setwd("/Users/im3/Desktop/COVID/Project_Heron/Analysis_shearwater_calls/")
 mutations_file = "shearwater_intermediate_intersect_muts_both_runs_annotated_median_values_deltaVAF0.05_merge.rds"
 metadata_file = "replicate_meta.tsv"
 mutations = readRDS(mutations_file)
