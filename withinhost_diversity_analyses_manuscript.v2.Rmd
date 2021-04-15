@@ -12,8 +12,8 @@ knitr::opts_chunk$set(fig.path='Figs/', dev=c('png','pdf'), warning=FALSE, messa
 ####Input files
 
 ```{r message=FALSE, warning=FALSE}
-mutations_file = "shearwater_intermediate_intersect_muts_both_runs_annotated_median_values_deltaVAF0.05_merge.rds"
-metadata_file = "replicate_meta.tsv"
+mutations_file = "./data/shearwater_intermediate_intersect_muts_both_runs_annotated_median_values_deltaVAF0.05_merge.rds"
+metadata_file = "./data/replicate_meta.tsv"
 mutations = readRDS(mutations_file)
 exclude_samples = c("CAMB-728D4","CAMB-79345")
 ```
@@ -24,7 +24,7 @@ Reformatting the mutation file and adding sequence context information.
 mutations$chr = "MN908947.3"; mutations$sampleID = mutations$sample; mutations$vaf = mutations$both_vaf # Formatting
 mutations = mutations[,c("sampleID","chr","pos","ref","mut","r1_vaf","r2_vaf","r1_pval","r2_pval","vaf")] # Formatting
 meta = read.table(metadata_file, header = 1, sep = "\t", stringsAsFactors = F)
-genomefa = "nCoV-2019.reference.fasta"
+genomefa = "./data/nCoV-2019.reference.fasta"
 genome = toupper(seqinr::read.fasta(genomefa)[[1]])
 mutations$context = sapply(mutations$pos, function(x) paste(genome[(x-1):(x+1)],collapse="")) # Trinucleotide context
 ```
@@ -49,7 +49,7 @@ for (j in ind) {
 }
 mutations = mutations[!rmpos, ]
 mutations = mutations[!(mutations$sampleID %in% exclude_samples), setdiff(colnames(mutations),"end")]
-write.table(mutations, file="Shearwater_calls_20200714.txt", col.names=T, row.names=F, sep="\t", quote=F)
+write.table(mutations, file="./data/reprocessed/Shearwater_calls_20200714.txt", col.names=T, row.names=F, sep="\t", quote=F)
 ```
 
 Numbers of patients and mutations in the dataset.
@@ -63,7 +63,7 @@ num_dels = sum(nchar(aux$ref)>nchar(aux$mut) | aux$mut=="-")
 num_inds = sum(nchar(aux$ref)<nchar(aux$mut))
 num_mnvs = sum(nchar(aux$ref)>1 & nchar(aux$mut)>1 & nchar(aux$ref)==nchar(aux$mut))
 # Numbers of patients
-samples = read.table("sample_list_1181.tsv", header=0, sep="\t", stringsAsFactors=F)[,1]
+samples = read.table("./data/sample_list_1181.tsv", header=0, sep="\t", stringsAsFactors=F)[,1]
 m = meta[meta$sample_id %in% setdiff(samples,exclude_samples), ]
 m$biosample_sources[m$biosample_sources==""] = 1:sum(m$biosample_sources=="")
 f = table(m$biosample_sources)
@@ -79,7 +79,7 @@ Functional annotation of the mutations (using dNdScv).
 
 ```{r message=FALSE, warning=FALSE}
 library(dndscv)
-dndsout = dndscv(mutations[,1:5], refdb = "RefCDS_MN908947.3.peptides.rda", max_muts_per_gene_per_sample = Inf, max_coding_muts_per_sample = Inf)
+dndsout = dndscv(mutations[,1:5], refdb = "./data/RefCDS_MN908947.3.peptides.rda", max_muts_per_gene_per_sample = Inf, max_coding_muts_per_sample = Inf)
 annot = dndsout$annotmuts[,c("gene","aachange","ntchange","codonsub","impact","pid")]
 annot$str = paste(dndsout$annotmuts$sampleID, dndsout$annotmuts$pos, dndsout$annotmuts$ref, dndsout$annotmuts$mut, sep="_")
 mutations$str = paste(mutations$sampleID, mutations$pos, mutations$ref, mutations$mut, sep="_")
@@ -91,7 +91,7 @@ for (j in 1:length(dup)) {
     rmpos[which(mutations$str==dup[j])[-1]] = 1
 }
 mutations = mutations[!rmpos, setdiff(colnames(mutations),"str")]
-write.table(mutations, file="Shearwater_calls_20200714_annot.txt", col.names=T, row.names=F, sep="\t", quote=F)
+write.table(mutations, file="./data/reprocessed/Shearwater_calls_20200714_annot.txt", col.names=T, row.names=F, sep="\t", quote=F)
 ```
 
 We then generate some basic summary plots of the frequency of mutations.
@@ -144,12 +144,12 @@ trinucs = paste(rep(nts,each=16,times=1),rep(nts,each=4,times=4),rep(nts,each=1,
 trinfreq = trinfreq[trinucs]; trinfreq[is.na(trinfreq)] = 0; names(trinfreq) = trinucs
 #dev.new(width=9,height=4.5)
 m = unique(major[,c("chr","pos","ref","mut","context")])
-plotspectrum192(m, pdfname="major_spectrum.pdf", trinfreqs=trinfreq, plottype=1); dev.off(); dev.off()
-plotspectrum12(m, pdfname="major_spectrum12.pdf", trinfreqs=trinfreq, ymax=0.6); dev.off(); dev.off()
-plotspectrum192(m, pdfname="major_spectrum_unnormalised.pdf", trinfreqs=NULL, plottype=1); dev.off(); dev.off()
+plotspectrum192(m, pdfname="./data/reprocessed/major_spectrum.pdf", trinfreqs=trinfreq, plottype=1); dev.off(); dev.off()
+plotspectrum12(m, pdfname="./data/reprocessed/major_spectrum12.pdf", trinfreqs=trinfreq, ymax=0.6); dev.off(); dev.off()
+plotspectrum192(m, pdfname="./data/reprocessed/major_spectrum_unnormalised.pdf", trinfreqs=NULL, plottype=1); dev.off(); dev.off()
 
 m$sampleID = "sarscov2"; m = m[,c("sampleID","chr","pos","ref","mut")]
-dndsout_major = dndscv(m, refdb = "RefCDS_MN908947.3.peptides.rda", max_muts_per_gene_per_sample = Inf, max_coding_muts_per_sample = Inf, cv = NULL)
+dndsout_major = dndscv(m, refdb = "./data/RefCDS_MN908947.3.peptides.rda", max_muts_per_gene_per_sample = Inf, max_coding_muts_per_sample = Inf, cv = NULL)
 ```
 
 Plotting the spectrum of unique within-host variants.
@@ -157,12 +157,12 @@ Plotting the spectrum of unique within-host variants.
 ```{r message=FALSE, warning=FALSE, results='hide'}
 #dev.new(width=9,height=5)
 m = unique(withinhost[,c("chr","pos","ref","mut","context")])
-plotspectrum192(m, pdfname="withinhost_spectrum.pdf", trinfreqs=trinfreq, plottype=1); dev.off(); dev.off()
-plotspectrum12(m, pdfname="withinhost_spectrum12.pdf", trinfreqs=trinfreq, ymax=0.6); dev.off(); dev.off()
-plotspectrum192(m, pdfname="withinhost_spectrum_unnormalised.pdf", trinfreqs=NULL, plottype=1); dev.off(); dev.off()
+plotspectrum192(m, pdfname="./data/reprocessed/withinhost_spectrum.pdf", trinfreqs=trinfreq, plottype=1); dev.off(); dev.off()
+plotspectrum12(m, pdfname="./data/reprocessed/withinhost_spectrum12.pdf", trinfreqs=trinfreq, ymax=0.6); dev.off(); dev.off()
+plotspectrum192(m, pdfname="./data/reprocessed/withinhost_spectrum_unnormalised.pdf", trinfreqs=NULL, plottype=1); dev.off(); dev.off()
 
 m$sampleID = "sarscov2"; m = m[,c("sampleID","chr","pos","ref","mut")]
-dndsout_withinhost1 = dndscv(m, refdb = "RefCDS_MN908947.3.peptides.rda", max_muts_per_gene_per_sample = Inf, max_coding_muts_per_sample = Inf, outp = 1)
+dndsout_withinhost1 = dndscv(m, refdb = "./data/RefCDS_MN908947.3.peptides.rda", max_muts_per_gene_per_sample = Inf, max_coding_muts_per_sample = Inf, outp = 1)
 ```
 
 Unlike major variants, which are shared across samples due to the phylogenetic relationship among samples, within-host variants shared across samples seem to be largely independently recurrent events. Counting each of them only once artificially flattens the normalised mutation spectrum. We can reduce this distortion by allowing sites to be mutated a maximum number of times (e.g. 5). This avoids a few highly recurrent sites from dominating the spectrum.
@@ -175,12 +175,12 @@ for (j in 1:length(subcspl)) { subcspl[[j]] = subcspl[[j]][1:min(nrow(subcspl[[j
 subcspl = do.call("rbind", subcspl)
 #dev.new(width=9,height=5)
 m = subcspl[,c("chr","pos","ref","mut","context")]
-plotspectrum192(m, pdfname="withinhost_spectrum_max5timespermutation.pdf", trinfreqs=trinfreq, plottype=1); dev.off(); dev.off()
-plotspectrum12(m, pdfname="withinhost_spectrum_max5timespermutation12.pdf", trinfreqs=trinfreq, ymax=0.6); dev.off(); dev.off()
-plotspectrum192(m, pdfname="withinhost_spectrum_max5timespermutation_unnormalised.pdf", trinfreqs=NULL, plottype=1); dev.off(); dev.off()
+plotspectrum192(m, pdfname="./data/reprocessed/withinhost_spectrum_max5timespermutation.pdf", trinfreqs=trinfreq, plottype=1); dev.off(); dev.off()
+plotspectrum12(m, pdfname="./data/reprocessed/withinhost_spectrum_max5timespermutation12.pdf", trinfreqs=trinfreq, ymax=0.6); dev.off(); dev.off()
+plotspectrum192(m, pdfname="./data/reprocessed/withinhost_spectrum_max5timespermutation_unnormalised.pdf", trinfreqs=NULL, plottype=1); dev.off(); dev.off()
 
 m$sampleID = paste("sarscov2", 1:nrow(m), sep=":"); m = m[,c("sampleID","chr","pos","ref","mut")]
-dndsout_withinhost2 = dndscv(m, refdb = "RefCDS_MN908947.3.peptides.rda", max_muts_per_gene_per_sample = Inf, max_coding_muts_per_sample = Inf)
+dndsout_withinhost2 = dndscv(m, refdb = "./data/RefCDS_MN908947.3.peptides.rda", max_muts_per_gene_per_sample = Inf, max_coding_muts_per_sample = Inf)
 ```
 
 Rate ratio of the plus/minus strands for C>U vs G>U normalised by sequence composition, as shown in the main text.
@@ -199,12 +199,12 @@ mintimes = 5
 withinhost$mutfreq = table(withinhost$mutstr)[withinhost$mutstr]
 recurrsites = unique(withinhost[withinhost$mutfreq>=mintimes, c("pos","ref","mut","context")])
 #dev.new(width=9,height=5)
-plotspectrum192(recurrsites, pdfname="withinhost_spectrum_recurrsites.pdf", trinfreqs=trinfreq, plottype=1); dev.off(); dev.off()
-plotspectrum12(recurrsites, pdfname="withinhost_spectrum_recurrsites12.pdf", trinfreqs=trinfreq); dev.off(); dev.off()
-plotspectrum192(recurrsites, pdfname="withinhost_spectrum_recurrsites_unnormalised.pdf", trinfreqs=NULL, plottype=1); dev.off(); dev.off()
+plotspectrum192(recurrsites, pdfname="./data/reprocessed/withinhost_spectrum_recurrsites.pdf", trinfreqs=trinfreq, plottype=1); dev.off(); dev.off()
+plotspectrum12(recurrsites, pdfname="./data/reprocessed/withinhost_spectrum_recurrsites12.pdf", trinfreqs=trinfreq); dev.off(); dev.off()
+plotspectrum192(recurrsites, pdfname="./data/reprocessed/withinhost_spectrum_recurrsites_unnormalised.pdf", trinfreqs=NULL, plottype=1); dev.off(); dev.off()
 
 m = recurrsites; m$chr = "MN908947.3"; m$sampleID = "sarscov2"; m = m[,c("sampleID","chr","pos","ref","mut")]
-dndsout_recurr = dndscv(m, refdb = "RefCDS_MN908947.3.peptides.rda", max_muts_per_gene_per_sample = Inf, max_coding_muts_per_sample = Inf)
+dndsout_recurr = dndscv(m, refdb = "./data/RefCDS_MN908947.3.peptides.rda", max_muts_per_gene_per_sample = Inf, max_coding_muts_per_sample = Inf)
 ```
 
 This reveals a clear bias towards C>T and, particularly, for TCG>TTG (although the absolute number of recurrent TCG>TTG sites is small). We can look at the extended sequence context to try to gain further insights into these recurrent sites. The sequences below show a relative enrichment of T upstream of the mutant base.
@@ -224,7 +224,7 @@ for (j in 1:length(subcspl)) { subcspl[[j]] = subcspl[[j]][1:min(nrow(subcspl[[j
 subcspl = do.call("rbind", subcspl)
 m = subcspl[,c("chr","pos","ref","mut","context")]
 m$sampleID = paste("sarscov2", 1:nrow(m), sep=":"); m = m[,c("sampleID","chr","pos","ref","mut")]
-dndsout_withinhost3 = dndscv(m, refdb = "RefCDS_MN908947.3.peptides.rda", max_muts_per_gene_per_sample = Inf, max_coding_muts_per_sample = Inf, outp = 1)
+dndsout_withinhost3 = dndscv(m, refdb = "./data/RefCDS_MN908947.3.peptides.rda", max_muts_per_gene_per_sample = Inf, max_coding_muts_per_sample = Inf, outp = 1)
 ```
 
 ####dN/dS ratios for within-host and major variants
@@ -255,12 +255,12 @@ print(sprintf("P-values VAF of missense or nonsense mutations vs synonymous: pmi
 
 ####Annotation of the support for the reference base
 
-```{r message=FALSE, warning=FALSE}
+```{r message=FALSE, warning=FALSE, eval=FALSE,}
 # Loading the mutant calls
 counts1 = readRDS("run_1_coverage.rds")
 counts2 = readRDS("run_2_coverage.rds")
 countsall = counts1[,,1:6] + counts1[,,7:12] + counts2[,,1:6] + counts2[,,7:12]
-counts_samplids = read.table("sample_list_1181.tsv", header=0, sep="\t", stringsAsFactors=F)[,1]
+counts_samplids = read.table("./data/sample_list_1181.tsv", header=0, sep="\t", stringsAsFactors=F)[,1]
 counts_nts = c("A","T","C","G","-","INS")
 ntids = setNames(1:6,counts_nts)
 mutations$ref1 = ntids[substr(mutations$ref,1,1)]
@@ -270,14 +270,14 @@ for (j in 1:nrow(mutations)) {
     mutations$vaf_ref[j] = x[mutations$ref1[j]] / sum(x)
 }
 mutations = mutations[, setdiff(colnames(mutations),"ref1")]
-write.table(mutations, file="Shearwater_calls_20200714_annot.txt", col.names=T, row.names=F, sep="\t", quote=F)
+write.table(mutations, file="./data/reprocessed/Shearwater_calls_20200714_annot.txt", col.names=T, row.names=F, sep="\t", quote=F)
 ```
 
 ####Distribution of recurrent intrahost mutations
 
 We can first plot the position and frequency of recurrent intrahost variants across the viral genome, and then calculate the number of different genomic backgrounds (as defined by the set of major variants) in which they occur.
 
-```{r message=FALSE, warning=FALSE, fig_genomewide_distrib_recurrsites, fig.height = 3.5, fig.width = 6}
+```{r message=FALSE, warning=FALSE, eval=FALSE, fig_genomewide_distrib_recurrsites, fig.height = 3.5, fig.width = 6}
 withinhost$mutstr = paste(withinhost$pos)
 mintimes = 5
 numsamples = 1181-length(exclude_samples)
