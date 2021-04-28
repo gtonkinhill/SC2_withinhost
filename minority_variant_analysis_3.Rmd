@@ -313,6 +313,25 @@ plotdf <- plotdf %>%
   filter(sampleA %in% full_tree$tip.label) %>%
   filter(sampleB %in% full_tree$tip.label)
 
+labels <- c('x ≤ 1', '1 < x ≤ 2', '2 < x ≤ 5', '5 < x ≤ 10', '10 < x ≤ 30')
+plotdf$count_range <- cut(plotdf$count, breaks = c(0,1,2,5,10,30), labels = labels)
+plotdf$count_range <- factor(as.character(plotdf$count_range), levels = labels)
+
+plotdf <- plotdf %>% filter(plotdf$variable=="within-host variants < 2% of samples")
+
+meta <- fread("./data/replicate_meta.tsv", data.table = FALSE) %>% as_tibble()
+loc_anno <- meta %>% filter(sample_id %in% c(plotdf$sampleA, plotdf$sampleB))
+loc_anno$adm2[loc_anno$adm2=='Unknown'] <- 'OTHER'
+loc_anno$adm2[loc_anno$adm2=='GREATER_LONDON'] <- 'LONDON'
+loc_anno$adm2[loc_anno$adm2==""] <- "OTHER"
+loc_anno <- tibble(
+  id=loc_anno$sample_id,
+  location=loc_anno$adm2,
+  location2=as.numeric(factor(loc_anno$adm2))
+)
+
+
+
 nodes <- tibble(nodes = tip_order, pos = length(tip_order):1)
 gr <- igraph::graph_from_data_frame(plotdf, vertices = nodes)
 
@@ -320,16 +339,34 @@ link <- ggraph(gr,
        layout = 'manual', 
        y = rep(0, length(nodes$pos)), 
        x = nodes$pos) +
-  geom_edge_arc(aes(color=count), alpha=0.1, fold = TRUE) +
+  geom_edge_arc(alpha=0.05, fold = TRUE) +
   scale_x_continuous(breaks=1:length(tip_order), labels=tip_order) +
-  facet_wrap(~variable) +
+  facet_wrap(~count_range, nrow = 1) +
   coord_flip() +
-  theme(strip.text.x = element_text(size = 10))
+  theme(strip.text.x = element_text(size = 10),
+        panel.background = element_blank())
 
-gg <- ggtree(full_tree)
+gg <- ggtree(full_tree) + theme_tree2()
 
-gg + link
-ggsave(filename = "Figures/phylogeny_with_maf_links2.pdf", width = 12, height = 7)
+loc_anno$pos <- nodes$pos[match(loc_anno$id, nodes$nodes)]
+gg2 <- ggplot(loc_anno, aes(x=location, y=pos, fill=location)) +
+  geom_tile(height=5) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.line = element_blank(),
+        axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = 'none',
+        axis.text.x = element_text(angle = 45, hjust=1)) +
+  scale_fill_manual(values = c('#a6cee3','#1f78b4','#b2df8a','#33a02c','#fb9a99','#e31a1c',
+                                '#fdbf6f','#ff7f00','#cab2d6','#6a3d9a','#bababa','#b15928'))
+gg2
+
+gg + gg2 + link + patchwork::plot_layout(widths = c(3,3,6))
+ggsave(filename = "Figures/phylogeny_with_maf_links3.pdf", width = 12, height = 7)
 ggsave(filename = "Figures/phylogeny_with_maf_links2.png", width = 12, height = 7)
 ```
 
@@ -867,7 +904,7 @@ write.csv(delta_results, file="./Processed_data/delta_results.csv", quote = FALS
 
 #### D statistic
 
-```{r}
+```{r, eval=FALSE}
 bindata <- map_dfc(names(tb)[tb>2], ~{
   ml_tree$tip.label %in% run_consensus_df$sample[run_consensus_df$POS==.x]
 })
@@ -984,7 +1021,7 @@ write.csv(Dstat_results, "./Processed_data/Dstat_results.csv", row.names=FALSE, 
 
 combine into table
 
-```{r}
+```{r, ecal=FALSE}
 Dstat_results <- fread("./Processed_data/Dstat_results.csv", data.table = FALSE) %>% as_tibble()
 concordance_stats <- merge(delta_results, Dstat_results, by.x='POS', by.y='pos', all=TRUE) %>% as_tibble()
 concordance_stats$log1_delta <- NULL
@@ -1180,13 +1217,16 @@ summary(glm(n_shared ~ isswab + n_samples + n_muts, data = plotdf2, family='pois
 Finally, we plot the difference in the number of withinhost minority variants between each pairwise combination of samples where the x-axis indicates the number of days seperating those samples.
 
 ```{r}
+multi_run_calls$ct <- as.numeric(meta$diagnostic_ct_value[match(multi_run_calls$sampleID, meta$sample_id)])
+
 pairwise_within_host_maf_diff <- map_dfr(unique(multi_run_calls_recovered$host), ~ {
   print(.x)
   temp <- multi_run_calls %>% 
     filter(host==.x) %>% 
     group_by(sampleID, date) %>% 
     summarise(
-      maf_count = n()
+      maf_count = n(),
+      max_ct = max(ct)
     ) %>% arrange(date)
   
   if (nrow(temp)<2) return(tibble())
@@ -1195,25 +1235,29 @@ pairwise_within_host_maf_diff <- map_dfr(unique(multi_run_calls_recovered$host),
   maf_diff <- map_dfr(pw, function(p){
     tibble(
       date_diff = temp$date[[p[[2]]]] - temp$date[[p[[1]]]],
-      maf_diff = temp$maf_count[[p[[2]]]] - temp$maf_count[[p[[1]]]]
+      maf_diff = temp$maf_count[[p[[2]]]] - temp$maf_count[[p[[1]]]],
+      max_ct = max(temp$max_ct)
     )
   }) %>% 
     group_by(date_diff) %>%
     summarise(
-      mean_maf_diff = mean(maf_diff)
+      mean_maf_diff = mean(maf_diff),
+      max_ct = max(temp$max_ct)
     )
   maf_diff$host <- .x
   return(maf_diff)
 })
 
 
-gg3 <- ggplot(pairwise_within_host_maf_diff, aes(x=date_diff, y=mean_maf_diff, group=date_diff)) +
+gg3 <- ggplot(pairwise_within_host_maf_diff, aes(x=date_diff, y=mean_maf_diff, group=date_diff, col=max_ct)) +
   geom_boxplot(outlier.colour = NA) +
-  geom_jitter(height = 0, width = 0.2) +
+  geom_jitter(height = 0, width = 0.2, size=3) +
   theme_bw(base_size = 16) +
   scale_x_continuous(breaks=0:9) +
+  scale_color_binned(type='viridis') +
   xlab("time difference between samples (days)") +
-  ylab("difference in number of minor alleles")
+  ylab("difference in number of minor alleles") +
+  labs(color='max Ct')
 gg3
 
 model_data <- multi_run_calls_recovered %>% 
