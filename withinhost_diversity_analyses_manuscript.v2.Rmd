@@ -93,7 +93,9 @@ median(table(mutations$sampleID[!mutations$consensus]))
 
 # expected number of differences between two random genomes
 (2 * sum(mutations$vaf*(1-mutations$vaf)))/length(unique(mutations$sampleID))
-mean(mutations$vaf*(1-mutations$vaf))
+
+k <- (mutations$vaf>0) & (mutations$vaf<1)
+mean(sqrt(mutations$vaf*(1-mutations$vaf)))
 ```
 
 Functional annotation of the mutations (using dNdScv).
